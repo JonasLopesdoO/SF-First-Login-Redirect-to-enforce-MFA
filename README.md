@@ -1,46 +1,31 @@
 
-# Send email after password set
+# Enforce MFA after first password setup - Experience Cloud
 
-Hi everyone, recently I had a tricky requirement to solve in Salesforce Experience Cloud. I was preparing this material some time ago and wanted to share here for who can benefit from it.  
+Hi everyone, some months ago I had a tricky requirement to solve in Salesforce Experience Cloud with MFA. I was preparing this material some time ago and wanted to share here for who can benefit from it.
 
 ## Requirement:
-Send an email everytime the user finishes reseting the password in an experience cloud portal site
-Problem: Salesforce doesn't trigger an event by password set up, only when the reset password form is filled.
+By security reasons, the client asked to only let the user log in the portal by going through the MFA process.
 
-The `LastPasswordChangeDate` field doesn't fire apex triggers, record triggered flows  or platform events with detailed payload in case they exist.
+## Problem:
+For some reason during the first login after the user sets his password does not fire the MFA in Eperience Cloud, and only triggers the MFA flow in the second login after setting the password.
+So after the user set the password the first time he is redirected to the home page alreadu right after setting the password, even though MFA is enabled for that user.
+It is only enforced in the second login flow as per Salesforce regular execution.
 
 ## Restrictions: 
-Salesforce only sends email when the user asks to reset password in the reset password page.
-
-The field `LastPasswordChangeDate` can not be used to trigger a flow, platform event or apex trigger as well as some other standard fields like `LastLoginDate` so we can not rely on this standard field to fire some process to send the email.
+The field `LastLoginDate` can not be used to trigger a flow, platform event or apex trigger as well as some other standard fields so we can not rely on this standard field to fire some process to enforce MFA.
 
 ## Solution: 
-The solution involves Scheduled Jobs, Custom Field, Email Template and Custom Settings
-- Create a new custom field to mimic the standard `LastPasswordChangeDate` in the User object so we can rely on it to compare the last changed password date. For instance I used the same name [LastPasswordChangeDate__c](https://github.com/JonasLopesdoO/SF-Password-Reseted-Email-Send/blob/main/force-app/main/default/objects/User/fields/LastPasswordChangeDate__c.field-meta.xml)
-- Create a new email template to inform the user that his password was correctly set up. [Portal_Changed_password](https://github.com/JonasLopesdoO/SF-Password-Reseted-Email-Send/blob/main/force-app/main/default/email/unfiled%24public/Portal_Changed_password.email)
-- Create an apex scheduler class that will runs from every **n** minutes to check if the password was changed from the latest n minutes to now. [UserChangePasswordSchedulable](https://github.com/JonasLopesdoO/SF-Password-Reseted-Email-Send/blob/main/force-app/main/default/classes/UserChangePasswordSchedulable.cls)
-- Create a Custom Setting to store this **n** minutes so it can be changed manually later by a salesforce admin. [BT_CheckPasswordChange__c](https://github.com/JonasLopesdoO/SF-Password-Reseted-Email-Send/tree/main/force-app/main/default/objects/BT_CheckPasswordChange__c)
+The solution involves Custom Field and Controller override.
+- Create a new custom field in the User object called [FirstLoginDate__c](https://github.com/JonasLopesdoO/SF-First-Login-Redirect-to-enforce-MFA/blob/main/force-app/main/default/objects/User/fields/FirstLoginDate__c.field-meta.xml) to mimic the standard `LastLoginDate` in the User object so we can rely on it to compare the first login date to redirect the user to MFA if it is the first login.
+- An override in the existing [CommunitiesLandingController](https://github.com/JonasLopesdoO/SF-First-Login-Redirect-to-enforce-MFA/blob/main/force-app/main/default/classes/CommunitiesLandingController.cls) apex controller for Login in experience cloud
 
 ## Explanation
-If the new field is null in the first execution, set it to be the same value as the current `LastPasswordChangeDate`
-If the standard `LastPasswordChangeDate` field is bigger than the new custom field, it means the password was changed, so we can send the email
+If the new field is null in the first execution, it means it is the first user login, so we have to set it to be the same value as the current `LastLoginDate`.
 
-After that we set the new field to have the same value of the standard field, so it will fire only once as needed.
+After that we need to redirect the user to the logout so we make sure he will login again, and therefore, Salesforce will enforce MFA setup.
 
-Abort the job and reschedule itself to run in the next n minutes, so you will always have only one instance of the pending job to run and not hit the 100 queued jobs limit. 
-
-Doing this way we avoid filling the jobs pending queue which has a small limit compared if we are setting all the jobs needed to run throughout the day. 
-
+The code will be one time execution only for the first login to that user unless manually changed by the system administrator. So the new custom field can be created hidden from all profiles and only visible for the back end execution, with the solely purpose to enforce the MFA setup before login in to home page in the first time login.
 
 ---
-> ℹ️ **_TIP:_**  As this is a really fast and small consuming process, you can put it to run every minute or every two minutes. I did that and had no blockers. Since the only record that will be locked is the user record that changed the password in the latest minute. For more complex and demanding processes I recommend separating the job in less frequent executions or separate into two different jobs.
+> ℹ️ **_TIP:_**  This solution is needed as for today, however Salesforce can come up with a solution to that in the future. This is a temporary solution meanwhile this is still a misbehavior from Salesforce.
 ---
-
-
-### Considerations:
-Problem with the approach:
-If the user goes fast and set his password as soon as the email arrives and complete the password setup before the time set, he will probably not receive the confirmation password email, because the new field will be first set from null to the `LastPasswordChangeDate`, then to the new changed password date. This is an edge case and to decrease the chance from this to happen we can set the job to run every minute.
-Additional checks and approachs could be done to avoid this problem, but it was not done in this example due to the restriction of the requirement itself.
-
-![Email Sent](https://github.com/JonasLopesdoO/SF-Password-Reseted-Email-Send/blob/main/image/email.png "Email Sent")
-
